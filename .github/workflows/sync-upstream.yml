@@ -1,0 +1,62 @@
+name: Sync upstream main
+
+# main 只做「上游镜像」：本工作流每天把 ddcat-ai/open-ai-canvas 的 main
+# 快进到本仓库 main，二开代码永远不放在 main 上，因此这里只做 --ff-only。
+#
+# ⚠️ GitHub 的 schedule 只在仓库「默认分支」上触发。
+#    本仓库默认分支需要设为 dev（Settings → General → Default branch），
+#    这样定时任务从 dev 读取本文件，而 main 保持纯净。
+
+on:
+  schedule:
+    - cron: "0 19 * * *" # UTC 19:00 = 北京时间 03:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/ddcat-ai/open-ai-canvas.git
+          git fetch upstream --tags --prune
+
+      - name: Fast-forward main
+        id: ff
+        run: |
+          BEFORE=$(git rev-parse HEAD)
+          git merge --ff-only upstream/main
+          AFTER=$(git rev-parse HEAD)
+          if [ "$BEFORE" = "$AFTER" ]; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "main 已是最新，无需同步"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "main 已快进：$BEFORE → $AFTER"
+          fi
+
+      - name: Push main
+        if: steps.ff.outputs.changed == 'true'
+        run: git push origin main
+
+      - name: Summary
+        run: |
+          echo "### 上游同步结果" >> $GITHUB_STEP_SUMMARY
+          echo "- 是否有更新：\`${{ steps.ff.outputs.changed }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- main HEAD：\`$(git rev-parse --short HEAD)\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 上游 HEAD：\`$(git rev-parse --short upstream/main)\`" >> $GITHUB_STEP_SUMMARY
